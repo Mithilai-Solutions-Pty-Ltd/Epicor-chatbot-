@@ -1,0 +1,31 @@
+{
+  // ── VS Code Launch Configurations for BOTZI ─────────────
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // Run FastAPI backend with hot-reload
+      "name": "🚀 Run BOTZI Backend",
+      "type": "python",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": [
+        "backend.main:app",
+        "--reload",
+        "--port", "8000",
+        "--log-level", "info"
+      ],
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      // Run the WorkDrive sync manually
+      "name": "🔄 Run Zoho Sync",
+      "type": "python",
+      "request": "launch",
+      "module": "zoho_sync.sync_runner",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal"
+    }
+  ]
+}

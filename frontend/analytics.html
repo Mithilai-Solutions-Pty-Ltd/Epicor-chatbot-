@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>BOTZI Analytics Dashboard</title>
+  <style>
+    :root {
+      --primary: #1a56db; --surface: #fff;
+      --bg: #f0f4ff; --border: #d1d9f0;
+      --text: #1e293b; --muted: #64748b;
+      --green: #10b981; --amber: #f59e0b; --red: #ef4444;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); }
+    header {
+      background: linear-gradient(135deg, #1a56db, #1341b0);
+      color: #fff; padding: 20px 32px;
+      display: flex; align-items: center; gap: 14px;
+    }
+    header h1 { font-size: 20px; font-weight: 700; }
+    header p  { font-size: 13px; opacity: .8; }
+    .refresh-btn {
+      margin-left: auto; background: rgba(255,255,255,.2);
+      border: 1px solid rgba(255,255,255,.3); color: #fff;
+      padding: 7px 16px; border-radius: 8px; cursor: pointer; font-size: 13px;
+    }
+    .container { max-width: 1100px; margin: 0 auto; padding: 28px 20px; }
+
+    /* KPI cards */
+    .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 16px; margin-bottom: 28px; }
+    .kpi-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 14px; padding: 20px; text-align: center;
+    }
+    .kpi-card .icon  { font-size: 28px; margin-bottom: 8px; }
+    .kpi-card .value { font-size: 28px; font-weight: 700; color: var(--primary); }
+    .kpi-card .label { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+    /* Tables */
+    .section { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 20px; margin-bottom: 20px; }
+    .section h2 { font-size: 15px; font-weight: 600; margin-bottom: 14px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { text-align: left; padding: 8px 12px; background: var(--bg); color: var(--muted); font-weight: 600; font-size: 11px; }
+    td { padding: 9px 12px; border-top: 1px solid var(--border); }
+    tr:hover td { background: #f8faff; }
+
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+    .badge-green { background: #d1fae5; color: #065f46; }
+    .badge-amber { background: #fef3c7; color: #92400e; }
+    .badge-red   { background: #fee2e2; color: #991b1b; }
+
+    .loading { text-align: center; color: var(--muted); padding: 40px; font-size: 14px; }
+    .stars { color: #f59e0b; letter-spacing: 1px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>📊 BOTZI Analytics Dashboard</h1>
+    <p>Real-time chatbot usage, performance &amp; feedback</p>
+  </div>
+  <button class="refresh-btn" onclick="loadAll()">↻ Refresh</button>
+</header>
+
+<div class="container">
+
+  <!-- KPI Cards -->
+  <div class="kpi-grid" id="kpi-grid">
+    <div class="loading">Loading metrics…</div>
+  </div>
+
+  <!-- Top Questions -->
+  <div class="section">
+    <h2>🔥 Most Asked Questions</h2>
+    <table>
+      <thead><tr><th>#</th><th>Question</th><th>Count</th></tr></thead>
+      <tbody id="top-q-body"><tr><td colspan="3" class="loading">Loading…</td></tr></tbody>
+    </table>
+  </div>
+
+</div>
+
+<script>
+  // ── Config ──────────────────────────────────────────────
+  // UPDATE this to your Render backend URL
+  const API = window.location.hostname === "localhost"
+    ? "http://localhost:8000"
+    : "https://botzi-api.onrender.com";
+
+  // ── Load KPI summary ────────────────────────────────────
+  async function loadSummary() {
+    try {
+      const r = await fetch(`${API}/api/analytics/summary`);
+      const d = await r.json();
+      const stars = n => "⭐".repeat(Math.round(n || 0));
+      document.getElementById("kpi-grid").innerHTML = `
+        <div class="kpi-card"><div class="icon">💬</div><div class="value">${d.total_interactions ?? 0}</div><div class="label">Total Questions</div></div>
+        <div class="kpi-card"><div class="icon">👥</div><div class="value">${d.unique_users ?? 0}</div><div class="label">Unique Users</div></div>
+        <div class="kpi-card"><div class="icon">⚡</div><div class="value">${d.avg_response_time_ms ?? 0}ms</div><div class="label">Avg Response Time</div></div>
+        <div class="kpi-card"><div class="icon">⭐</div><div class="value">${(d.avg_rating ?? 0).toFixed(1)}</div><div class="label">Avg Rating / 5</div></div>
+        <div class="kpi-card"><div class="icon">🎯</div><div class="value">${d.high_confidence_pct ?? 0}%</div><div class="label">High Confidence</div></div>
+        <div class="kpi-card"><div class="icon">📝</div><div class="value">${d.total_feedback ?? 0}</div><div class="label">Feedback Received</div></div>
+      `;
+    } catch (e) {
+      document.getElementById("kpi-grid").innerHTML = `<div class="loading">⚠️ Could not load metrics</div>`;
+    }
+  }
+
+  // ── Load top questions ───────────────────────────────────
+  async function loadTopQuestions() {
+    try {
+      const r = await fetch(`${API}/api/analytics/top-questions?limit=15`);
+      const d = await r.json();
+      const rows = (d.questions || []).map((q, i) => `
+        <tr>
+          <td>${i + 1}</td>
+          <td>${escHtml(q.question)}</td>
+          <td><span class="badge badge-green">${q.count}×</span></td>
+        </tr>
+      `).join("") || `<tr><td colspan="3" style="color:var(--muted);text-align:center">No data yet</td></tr>`;
+      document.getElementById("top-q-body").innerHTML = rows;
+    } catch (e) {
+      document.getElementById("top-q-body").innerHTML = `<tr><td colspan="3" class="loading">⚠️ Could not load</td></tr>`;
+    }
+  }
+
+  function escHtml(s) {
+    return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  }
+
+  async function loadAll() {
+    await Promise.all([loadSummary(), loadTopQuestions()]);
+  }
+
+  // Auto-refresh every 60 seconds
+  loadAll();
+  setInterval(loadAll, 60000);
+</script>
+</body>
+</html>

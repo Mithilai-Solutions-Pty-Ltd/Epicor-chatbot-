@@ -1,0 +1,50 @@
+# ============================================================
+# render.yaml – Render Deployment Configuration
+# ============================================================
+# Deploy this entire repo to Render:
+#   1. Push to GitHub
+#   2. Connect repo in Render Dashboard
+#   3. Render will detect this file automatically
+#
+# Services defined:
+#   1. botzi-api      – FastAPI backend (Web Service)
+#   2. botzi-frontend – Static HTML chat UI (Static Site)
+#   3. botzi-sync     – Daily Zoho WorkDrive sync (Cron Job)
+# ============================================================
+
+services:
+
+  # ── 1. FastAPI Backend ──────────────────────────────────
+  - type: web
+    name: botzi-api
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    plan: free           # Free tier – keep alive via cron-job.org
+    healthCheckPath: /api/health
+    # Auto-deploy on every push to main branch
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.0"
+      # All other env vars are set in Render Dashboard → Environment
+      # (do NOT hardcode secrets here)
+
+  # ── 2. Frontend Static Site ─────────────────────────────
+  - type: static
+    name: botzi-frontend
+    staticPublishPath: ./frontend
+    buildCommand: echo "No build needed"
+    autoDeploy: true
+
+  # ── 3. Daily WorkDrive Sync Cron Job ────────────────────
+  - type: cron
+    name: botzi-sync
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m zoho_sync.sync_runner
+    schedule: "0 2 * * *"   # Every day at 2:00 AM UTC
+    plan: free
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.0"
