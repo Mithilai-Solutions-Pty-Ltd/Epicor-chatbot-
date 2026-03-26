@@ -7,6 +7,7 @@
   <style>
     :root {
       --primary: #1a56db; --surface: #fff;
+
       --bg: #f0f4ff; --border: #d1d9f0;
       --text: #1e293b; --muted: #64748b;
       --green: #10b981; --amber: #f59e0b; --red: #ef4444;
@@ -87,7 +88,7 @@
   // UPDATE this to your Render backend URL
   const API = window.location.hostname === "localhost"
     ? "http://localhost:8000"
-    : "https://botzi-api.onrender.com";
+    : "https://epicor-chatbot-api.onrender.com";
 
   // ── Load KPI summary ────────────────────────────────────
   async function loadSummary() {
