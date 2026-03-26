@@ -20,7 +20,6 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python -m zoho_sync.sync_runner
     schedule: "0 2 * * *"
-    plan: free
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.0"
