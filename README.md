@@ -279,5 +279,6 @@ WorkDrive scan → compare file_id + modified time vs Supabase sync_log
 See `.env.example` for full list with comments.
 
 ---
+---
 
 *BOTZI – Built for Mithilai Solutions · Epicor ERP AI Support*
