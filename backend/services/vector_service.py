@@ -56,7 +56,7 @@ def upsert_chunks(chunks: List[Dict[str, Any]]) -> int:
 
 
 def query_index(question: str, top_k: int = 5) -> List[Dict[str, Any]]:
-    threshold = float(os.environ.get("SIMILARITY_THRESHOLD", "0.55"))
+    threshold = float(os.environ.get("SIMILARITY_THRESHOLD", "0.3"))
     [q_embedding] = embed_texts([question])
     result = _sb.rpc("match_documents", {
         "query_embedding": q_embedding,
