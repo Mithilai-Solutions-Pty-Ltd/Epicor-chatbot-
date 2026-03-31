@@ -32,7 +32,7 @@ load_dotenv()
 CLIENT_ID     = os.environ.get("ZOHO_CLIENT_ID", "")
 CLIENT_SECRET = os.environ.get("ZOHO_CLIENT_SECRET", "")
 REDIRECT_URI  = "https://botzi-api.onrender.com/zoho/callback"
-SCOPES        = "WorkDrive.files.READ,WorkDrive.folders.READ,WorkDrive.team.READ"
+SCOPES        = "WorkDrive.files.ALL,WorkDrive.teamfolders.ALL,WorkDrive.workspace.ALL,WorkDrive.team.READ"
 ACCOUNTS_URL  = os.environ.get("ZOHO_ACCOUNTS_URL", "https://accounts.zoho.in/oauth/v2")
 
 if not CLIENT_ID or not CLIENT_SECRET:

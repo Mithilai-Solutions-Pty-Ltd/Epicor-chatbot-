@@ -198,13 +198,32 @@ def try_binary_download(url: str, access_token: str) -> Optional[bytes]:
     return None
 
 
+def get_preview_download_url(file_id: str, access_token: str) -> Optional[str]:
+    """
+    Fetch the previewinfo endpoint and return the preview_data_url.
+    This is a PDF-format URL served by Zoho's preview engine and does not
+    require admin-configured URL Rules (unlike /files/{id}/download).
+    Works for PDF, DOCX, PPTX — all are served as PDF by the preview engine.
+    """
+    base_url = require_env("ZOHO_WORKDRIVE_URL").rstrip("/")
+    headers = build_headers(access_token)
+    resp = requests.get(f"{base_url}/files/{file_id}/previewinfo", headers=headers, timeout=30)
+    if not resp.ok:
+        logger.warning("    previewinfo failed: %s %s", resp.status_code, preview_text(resp))
+        return None
+    url = safe_json(resp).get("data", {}).get("attributes", {}).get("preview_data_url")
+    if url:
+        logger.info("    Got preview_data_url: %s", url)
+    return url
+
+
 def download_file(file_id: str, access_token: str) -> bytes:
     base_url = require_env("ZOHO_WORKDRIVE_URL").rstrip("/")
     headers = build_headers(access_token)
 
+    # --- Step 1: try the direct download_url from file metadata ---
     info_url = f"{base_url}/files/{file_id}"
     info_resp = requests.get(info_url, headers=headers, timeout=30)
-
     logger.info("    Fetching metadata for file_id=%s -> %s", file_id, info_resp.status_code)
 
     if not info_resp.ok:
@@ -223,12 +242,7 @@ def download_file(file_id: str, access_token: str) -> bytes:
     if metadata_download_url:
         candidate_urls.append(metadata_download_url)
 
-    candidate_urls.extend(
-        [
-            f"{base_url}/files/{file_id}/download",
-            f"{base_url}/download/{file_id}",
-        ]
-    )
+    candidate_urls.append(f"{base_url}/files/{file_id}/download")
 
     seen = set()
     deduped_urls = []
@@ -243,9 +257,18 @@ def download_file(file_id: str, access_token: str) -> bytes:
         if content:
             return content
 
+    # --- Step 2: fallback — use Zoho preview engine (no URL Rules required) ---
+    logger.warning("    Direct download failed, falling back to preview engine")
+    preview_url = get_preview_download_url(file_id, access_token)
+    if preview_url:
+        content = try_binary_download(preview_url, access_token)
+        if content:
+            logger.info("    Downloaded via preview engine (%d bytes)", len(content))
+            return content
+
     raise ValueError(
         f"Download failed for file_id={file_id}. "
-        f"Tried URLs: {deduped_urls}"
+        f"Tried: {deduped_urls} + preview engine"
     )
 
 
@@ -398,7 +421,7 @@ def update_sync_log(file_id: str, file_name: str, modified: str, chunks: int):
 
 
 def run_sync():
-    from backend.services.pinecone_service import (
+    from backend.services.vector_service import (
         init_pinecone,
         upsert_chunks,
         delete_chunks_for_file,
@@ -435,6 +458,12 @@ def run_sync():
 
         prev_modified = sync_log.get(file_id)
         if prev_modified == modified:
+            skipped_count += 1
+            continue
+
+        # MP4 files produce no extractable text — skip download entirely
+        if doc_type == "mp4":
+            logger.info("  ⏭️ Skipping mp4 (no text): %s", file_name)
             skipped_count += 1
             continue
 

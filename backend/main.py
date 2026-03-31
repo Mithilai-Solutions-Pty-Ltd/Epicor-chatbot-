@@ -1,7 +1,7 @@
 """
 ============================================================
 BOTZI - Epicor AI Support Chatbot
-Backend: FastAPI + Pinecone + OpenAI + Supabase
+Backend: FastAPI + Supabase pgvector + OpenAI + Supabase
 ============================================================
 SETUP STEPS:
 1. pip install -r requirements.txt
@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse
 
 # ── Internal routers ──────────────────────────────────────
 from backend.routers import chat, feedback, analytics, health, cliq
-from backend.services.pinecone_service import init_pinecone
+from backend.services.vector_service import init_pinecone
 from backend.services.cache_service import cache
 from backend.middleware.rate_limiter import RateLimitMiddleware
 
@@ -38,12 +38,12 @@ async def lifespan(app: FastAPI):
     """Initialize all services on startup."""
     logger.info("🚀 BOTZI starting up...")
 
-    # Step 1 – Connect to Pinecone (vector DB)
+    # Step 1 – Connect to Supabase pgvector
     try:
         init_pinecone()
-        logger.info("✅ Pinecone connected")
+        logger.info("✅ Supabase pgvector connected")
     except Exception as e:
-        logger.error(f"❌ Pinecone init failed: {e}")
+        logger.error(f"❌ Supabase pgvector init failed: {e}")
 
     # Step 2 – Warm up in-memory cache
     cache.clear()

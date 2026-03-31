@@ -22,7 +22,7 @@ from typing import List, Dict, Any, Tuple
 
 from openai import OpenAI
 
-from backend.services.pinecone_service import query_index
+from backend.services.vector_service import query_index
 from backend.services.cache_service import cache
 from backend.services.supabase_service import log_interaction
 
