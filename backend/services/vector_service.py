@@ -1,4 +1,6 @@
 import os
+import gc
+import time
 import logging
 from typing import List, Dict, Any
 from openai import OpenAI
@@ -30,30 +32,49 @@ def embed_texts(texts: List[str]) -> List[List[float]]:
 
 
 def upsert_chunks(chunks: List[Dict[str, Any]]) -> int:
-    texts = [c["text"] for c in chunks]
-    embeddings = embed_texts(texts)
-    rows = []
-    for chunk, embedding in zip(chunks, embeddings):
-        meta = chunk["metadata"]
-        rows.append({
-            "id":        chunk["id"],
-            "file_id":   meta["file_id"],
-            "file_name": meta["file_name"],
-            "doc_type":  meta["doc_type"],
-            "page":      int(meta["page"]),
-            "source":    meta["source"],
-            "content":   chunk["text"],
-            "embedding": embedding,
-        })
-    batch_size = 50
+    batch_size = 10
     total = 0
-    for i in range(0, len(rows), batch_size):
-        batch = rows[i:i + batch_size]
-        _sb.table("documents").upsert(batch).execute()
-        total += len(batch)
-        logger.info(f"  Upserted batch {i//batch_size + 1} ({len(batch)} rows)")
-    return total
 
+    for i in range(0, len(chunks), batch_size):
+        batch = chunks[i:i + batch_size]
+        texts = [c["text"] for c in batch]
+        embeddings = embed_texts(texts)
+
+        rows = []
+        for chunk, embedding in zip(batch, embeddings):
+            meta = chunk["metadata"]
+            rows.append({
+                "id":        chunk["id"],
+                "file_id":   meta["file_id"],
+                "file_name": meta["file_name"],
+                "doc_type":  meta["doc_type"],
+                "page":      int(meta["page"]),
+                "source":    meta["source"],
+                "content":   chunk["text"],
+                "embedding": embedding,
+            })
+
+        # Retry up to 3 times on connection error
+        for attempt in range(3):
+            try:
+                _sb.table("documents").upsert(rows).execute()
+                total += len(rows)
+                logger.info(f"  Upserted batch {i//batch_size + 1} ({len(rows)} rows)")
+                break
+            except Exception as e:
+                if attempt < 2:
+                    logger.warning(f"  Batch {i//batch_size + 1} failed (attempt {attempt + 1}) — retrying in 5s: {e}")
+                    time.sleep(5)
+                    gc.collect()
+                else:
+                    logger.error(f"  Batch {i//batch_size + 1} failed after 3 attempts: {e}")
+                    raise
+
+        del rows, texts, embeddings, batch
+        gc.collect()
+        time.sleep(0.5)
+
+    return total
 
 def query_index(question: str, top_k: int = 5) -> List[Dict[str, Any]]:
     threshold = float(os.environ.get("SIMILARITY_THRESHOLD", "0.3"))

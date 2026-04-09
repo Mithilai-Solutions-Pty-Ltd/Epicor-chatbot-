@@ -3,6 +3,7 @@ import time
 import json
 import hashlib
 import logging
+import gc
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 
@@ -37,7 +38,6 @@ def preview_text(resp: requests.Response, limit: int = 1000) -> str:
 
 def get_zoho_access_token() -> str:
     url = require_env("ZOHO_ACCOUNTS_URL")
-
     resp = requests.post(
         url,
         data={
@@ -49,11 +49,9 @@ def get_zoho_access_token() -> str:
         timeout=30,
     )
     resp.raise_for_status()
-
     token = safe_json(resp).get("access_token")
     if not token:
         raise ValueError(f"No access_token in Zoho response: {preview_text(resp)}")
-
     logger.info("✅ Zoho access token obtained")
     return token
 
@@ -71,10 +69,7 @@ def list_folder_recursive(folder_id: str, access_token: str, depth: int = 0) -> 
         "Authorization": f"Zoho-oauthtoken {access_token}",
         "Accept": "application/vnd.api+json",
     }
-
     files: List[Dict[str, Any]] = []
-
-    # Choose correct endpoint
     if depth == 0:
         endpoint = f"{base_url}/teamfolders/{folder_id}/files"
     else:
@@ -86,7 +81,6 @@ def list_folder_recursive(folder_id: str, access_token: str, depth: int = 0) -> 
         params={"page[limit]": 200, "page[offset]": 0},
         timeout=30,
     )
-
     if not resp.ok:
         logger.error(f"WorkDrive API error {resp.status_code}: {resp.text[:500]}")
     resp.raise_for_status()
@@ -96,17 +90,13 @@ def list_folder_recursive(folder_id: str, access_token: str, depth: int = 0) -> 
 
     for item in items:
         attrs = item.get("attributes", {}) or {}
-
-        # 🔒 SAFE TYPE CONVERSION (fixes your crash)
         top_type = str(item.get("type", "") or "").strip().lower()
         item_type = str(attrs.get("type", "") or "").strip().lower()
         resource = str(attrs.get("resource_type", "") or "").strip().lower()
-
         file_name = str(attrs.get("name", "") or "")
         file_id = str(item.get("id", "") or "")
         modified = str(attrs.get("modified_time", "") or "")
 
-        # 📁 Detect folders safely
         is_folder = (
             top_type == "folders"
             or item_type == "folder"
@@ -119,9 +109,7 @@ def list_folder_recursive(folder_id: str, access_token: str, depth: int = 0) -> 
             files.extend(sub_files)
             continue
 
-        # 📄 Filter supported file types
         ext = file_name.lower().rsplit(".", 1)[-1] if "." in file_name else ""
-
         if ext in ("pdf", "pptx", "docx", "txt", "mp4"):
             logger.info(f"{'  ' * depth}📄 Found: {file_name} ({ext})")
             files.append({
@@ -142,7 +130,6 @@ def extract_download_url_from_metadata(meta: Dict[str, Any]) -> Optional[str]:
     attrs = data.get("attributes", {}) or {}
     links = data.get("links", {}) or {}
     top_links = meta.get("links", {}) or {}
-
     candidates = [
         attrs.get("download_url"),
         attrs.get("downloadUrl"),
@@ -151,11 +138,9 @@ def extract_download_url_from_metadata(meta: Dict[str, Any]) -> Optional[str]:
         links.get("self"),
         top_links.get("download"),
     ]
-
     for candidate in candidates:
         if isinstance(candidate, str) and candidate.startswith("http"):
             return candidate
-
     return None
 
 
@@ -176,7 +161,6 @@ def try_binary_download(url: str, access_token: str) -> Optional[bytes]:
         return None
 
     content_type = (resp.headers.get("Content-Type") or "").lower()
-
     logger.info("    GET %s -> %s (%s)", url, resp.status_code, content_type)
 
     if resp.ok and len(resp.content) > 100 and "application/json" not in content_type:
@@ -186,7 +170,6 @@ def try_binary_download(url: str, access_token: str) -> Optional[bytes]:
     if "application/json" in content_type:
         body = safe_json(resp)
         logger.warning("    JSON response from download URL: %s", json.dumps(body)[:1000])
-
         nested_url = extract_download_url_from_metadata(body)
         if nested_url and nested_url != url:
             logger.info("    Following nested download URL")
@@ -199,12 +182,6 @@ def try_binary_download(url: str, access_token: str) -> Optional[bytes]:
 
 
 def get_preview_download_url(file_id: str, access_token: str) -> Optional[str]:
-    """
-    Fetch the previewinfo endpoint and return the preview_data_url.
-    This is a PDF-format URL served by Zoho's preview engine and does not
-    require admin-configured URL Rules (unlike /files/{id}/download).
-    Works for PDF, DOCX, PPTX — all are served as PDF by the preview engine.
-    """
     base_url = require_env("ZOHO_WORKDRIVE_URL").rstrip("/")
     headers = build_headers(access_token)
     resp = requests.get(f"{base_url}/files/{file_id}/previewinfo", headers=headers, timeout=30)
@@ -221,7 +198,6 @@ def download_file(file_id: str, access_token: str) -> bytes:
     base_url = require_env("ZOHO_WORKDRIVE_URL").rstrip("/")
     headers = build_headers(access_token)
 
-    # --- Step 1: try the direct download_url from file metadata ---
     info_url = f"{base_url}/files/{file_id}"
     info_resp = requests.get(info_url, headers=headers, timeout=30)
     logger.info("    Fetching metadata for file_id=%s -> %s", file_id, info_resp.status_code)
@@ -237,11 +213,9 @@ def download_file(file_id: str, access_token: str) -> bytes:
     logger.info("    Metadata keys: %s", list(attrs.keys()))
 
     candidate_urls = []
-
     metadata_download_url = extract_download_url_from_metadata(info_json)
     if metadata_download_url:
         candidate_urls.append(metadata_download_url)
-
     candidate_urls.append(f"{base_url}/files/{file_id}/download")
 
     seen = set()
@@ -257,7 +231,6 @@ def download_file(file_id: str, access_token: str) -> bytes:
         if content:
             return content
 
-    # --- Step 2: fallback — use Zoho preview engine (no URL Rules required) ---
     logger.warning("    Direct download failed, falling back to preview engine")
     preview_url = get_preview_download_url(file_id, access_token)
     if preview_url:
@@ -274,20 +247,29 @@ def download_file(file_id: str, access_token: str) -> bytes:
 
 def extract_text_from_pdf(data: bytes) -> List[Dict[str, Any]]:
     import fitz
-
-    doc = fitz.open(stream=data, filetype="pdf")
     pages = []
-    for i, page in enumerate(doc, 1):
-        text = page.get_text("text").strip()
-        if text:
-            pages.append({"text": text, "page": i})
+    try:
+        doc = fitz.open(stream=data, filetype="pdf")
+        for i in range(len(doc)):
+            page = doc[i]
+            text = page.get_text("text").strip()
+            if text:
+                pages.append({"text": text, "page": i + 1})
+            page = None
+            if i % 50 == 0:
+                gc.collect()
+        doc.close()
+        del doc
+    except Exception as e:
+        logger.error(f"PDF extraction error: {e}")
+    finally:
+        gc.collect()
     return pages
 
 
 def extract_text_from_pptx(data: bytes) -> List[Dict[str, Any]]:
     from io import BytesIO
     from pptx import Presentation
-
     prs = Presentation(BytesIO(data))
     slides = []
     for i, slide in enumerate(prs.slides, 1):
@@ -303,11 +285,9 @@ def extract_text_from_pptx(data: bytes) -> List[Dict[str, Any]]:
 def extract_text_from_docx(data: bytes) -> List[Dict[str, Any]]:
     from io import BytesIO
     from docx import Document
-
     doc = Document(BytesIO(data))
     chunks_out = []
     page, buffer, word_count = 1, [], 0
-
     for para in doc.paragraphs:
         txt = para.text.strip()
         if not txt:
@@ -318,10 +298,8 @@ def extract_text_from_docx(data: bytes) -> List[Dict[str, Any]]:
             chunks_out.append({"text": "\n".join(buffer), "page": page})
             page += 1
             buffer, word_count = [], 0
-
     if buffer:
         chunks_out.append({"text": "\n".join(buffer), "page": page})
-
     return chunks_out
 
 
@@ -329,27 +307,24 @@ def extract_text_from_txt(data: bytes) -> List[Dict[str, Any]]:
     text = data.decode("utf-8", errors="ignore")
     lines = text.split("\n")
     chunks_out, buffer, page = [], [], 1
-
     for line in lines:
         buffer.append(line)
         if len(buffer) >= 80:
             chunks_out.append({"text": "\n".join(buffer), "page": page})
             page += 1
             buffer = []
-
     if buffer:
         chunks_out.append({"text": "\n".join(buffer), "page": page})
-
     return chunks_out
 
 
 def extract_text(data: bytes, doc_type: str) -> List[Dict[str, Any]]:
     extractor_map = {
-        "pdf": extract_text_from_pdf,
+        "pdf":  extract_text_from_pdf,
         "pptx": extract_text_from_pptx,
         "docx": extract_text_from_docx,
-        "txt": extract_text_from_txt,
-        "mp4": lambda d: [],
+        "txt":  extract_text_from_txt,
+        "mp4":  lambda d: [],
     }
     fn = extractor_map.get(doc_type)
     if fn is None:
@@ -366,40 +341,32 @@ def split_into_chunks(
     overlap: int = 100,
 ) -> List[Dict[str, Any]]:
     chunks = []
-
     for page_data in pages:
         text = page_data["text"]
         page = page_data["page"]
         start = 0
-
         while start < len(text):
             end = min(start + chunk_size, len(text))
             snippet = text[start:end].strip()
-
             if len(snippet) > 50:
                 chunk_id = hashlib.md5(f"{file_id}|{page}|{start}".encode()).hexdigest()
-                chunks.append(
-                    {
-                        "id": chunk_id,
-                        "text": snippet,
-                        "metadata": {
-                            "file_id": file_id,
-                            "file_name": file_name,
-                            "doc_type": doc_type,
-                            "source": file_name,
-                            "page": int(page),
-                        },
-                    }
-                )
-
+                chunks.append({
+                    "id": chunk_id,
+                    "text": snippet,
+                    "metadata": {
+                        "file_id":   file_id,
+                        "file_name": file_name,
+                        "doc_type":  doc_type,
+                        "source":    file_name,
+                        "page":      int(page),
+                    },
+                })
             start += chunk_size - overlap
-
     return chunks
 
 
 def get_sync_log() -> Dict[str, str]:
     from supabase import create_client
-
     sb = create_client(require_env("SUPABASE_URL"), require_env("SUPABASE_KEY"))
     result = sb.table("sync_log").select("file_id,modified").execute()
     return {row["file_id"]: row["modified"] for row in (result.data or [])}
@@ -407,17 +374,14 @@ def get_sync_log() -> Dict[str, str]:
 
 def update_sync_log(file_id: str, file_name: str, modified: str, chunks: int):
     from supabase import create_client
-
     sb = create_client(require_env("SUPABASE_URL"), require_env("SUPABASE_KEY"))
-    sb.table("sync_log").upsert(
-        {
-            "file_id": file_id,
-            "file_name": file_name,
-            "modified": modified,
-            "chunks": chunks,
-            "synced_at": datetime.now(timezone.utc).isoformat(),
-        }
-    ).execute()
+    sb.table("sync_log").upsert({
+        "file_id":   file_id,
+        "file_name": file_name,
+        "modified":  modified,
+        "chunks":    chunks,
+        "synced_at": datetime.now(timezone.utc).isoformat(),
+    }).execute()
 
 
 def run_sync():
@@ -440,77 +404,97 @@ def run_sync():
     all_files = list_folder_recursive(team_folder_id, token)
     logger.info("Found %d supported files in WorkDrive", len(all_files))
 
+    # Load sync log — all previously indexed files
     sync_log = get_sync_log()
-    logger.info("Sync log has %d previously indexed files", len(sync_log))
+    logger.info("Previously synced: %d files", len(sync_log))
 
     chunk_size = int(os.getenv("CHUNK_SIZE", "800"))
-    overlap = int(os.getenv("CHUNK_OVERLAP", "100"))
+    overlap    = int(os.getenv("CHUNK_OVERLAP", "100"))
 
-    new_count = 0
+    new_count     = 0
     updated_count = 0
     skipped_count = 0
 
     for file_info in all_files:
-        file_id = file_info["file_id"]
+        file_id   = file_info["file_id"]
         file_name = file_info["file_name"]
-        modified = file_info["modified"]
-        doc_type = file_info["doc_type"]
+        modified  = file_info["modified"]
+        doc_type  = file_info["doc_type"]
 
-        prev_modified = sync_log.get(file_id)
-        if prev_modified == modified:
-            skipped_count += 1
-            continue
-
-        # MP4 files produce no extractable text — skip download entirely
+        # ── SKIP MP4 always — no text to extract ──────────────
         if doc_type == "mp4":
-            logger.info("  ⏭️ Skipping mp4 (no text): %s", file_name)
             skipped_count += 1
+            logger.info("  ⏭️  Skipping mp4 (no text): %s", file_name)
             continue
 
-        is_update = prev_modified is not None
-        logger.info("  %s: %s", "Updating" if is_update else "Indexing", file_name)
+        # ── SKIP if already synced and not modified ────────────
+        if file_id in sync_log:
+            if sync_log[file_id] == modified:
+                skipped_count += 1
+                logger.info("  ⏭️  Skipping unchanged: %s", file_name)
+                continue
+            else:
+                logger.info("  🔄 Re-indexing (modified): %s", file_name)
+                is_update = True
+        else:
+            logger.info("  🆕 New file detected: %s", file_name)
+            is_update = False
 
+        # ── PROCESS FILE ──────────────────────────────────────
         try:
-            data = download_file(file_id, token)
+            data  = download_file(file_id, token)
             pages = extract_text(data, doc_type)
+
+            # Free download bytes immediately
+            del data
+            gc.collect()
 
             if not pages:
                 logger.warning("  ⚠️ No text extracted from %s", file_name)
+                # Mark as synced so it is never retried
+                update_sync_log(file_id, file_name, modified, 0)
                 continue
 
             chunks = split_into_chunks(
-                pages,
-                file_id,
-                file_name,
-                doc_type,
-                chunk_size=chunk_size,
-                overlap=overlap,
+                pages, file_id, file_name, doc_type,
+                chunk_size=chunk_size, overlap=overlap,
             )
 
+            # Free pages immediately
+            del pages
+            gc.collect()
+
+            # Delete old vectors before re-indexing
             if is_update:
                 delete_chunks_for_file(file_id)
+                logger.info("  🗑️  Deleted old vectors: %s", file_name)
 
             upserted = upsert_chunks(chunks)
-            logger.info("  ✅ %s: %s vectors upserted", file_name, upserted)
+            logger.info("  ✅ %s — %d vectors upserted", file_name, upserted)
 
             update_sync_log(file_id, file_name, modified, upserted)
+
+            # Free chunks immediately
+            del chunks
+            gc.collect()
 
             if is_update:
                 updated_count += 1
             else:
                 new_count += 1
 
-            time.sleep(0.5)
+            # Pause between files to keep memory low
+            time.sleep(3)
 
         except Exception as e:
-            logger.error("  ❌ Failed to process %s: %s", file_name, e, exc_info=True)
+            logger.error("  ❌ Failed: %s — %s", file_name, e, exc_info=True)
+            gc.collect()
+            continue
 
     logger.info("=" * 60)
     logger.info(
         "✅ Sync complete: %d new | %d updated | %d skipped",
-        new_count,
-        updated_count,
-        skipped_count,
+        new_count, updated_count, skipped_count,
     )
     logger.info("=" * 60)
 
