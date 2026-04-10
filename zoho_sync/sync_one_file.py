@@ -2,6 +2,7 @@ import os
 import sys
 import logging
 import gc
+import tempfile
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -21,8 +22,8 @@ def process_one(
 ):
     from zoho_sync.sync_service import (
         get_zoho_access_token,
-        download_file,
-        extract_text,
+        download_file_to_path,
+        extract_text_from_path,
         split_into_chunks,
         update_sync_log,
     )
@@ -40,12 +41,12 @@ def process_one(
 
     logger.info("Processing: %s", file_name)
 
-    # Download file
-    data = download_file(file_id, token)
+    # Download to temp file on disk — never loads full bytes into RAM
+    with tempfile.NamedTemporaryFile(suffix=f".{doc_type}", delete=True) as tmp:
+        download_file_to_path(file_id, token, tmp.name)
+        pages = extract_text_from_path(tmp.name, doc_type)
+    # tmp file deleted here automatically
 
-    # Extract text
-    pages = extract_text(data, doc_type)
-    del data
     gc.collect()
 
     if not pages:

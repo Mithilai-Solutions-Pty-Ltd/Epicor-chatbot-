@@ -384,6 +384,97 @@ def update_sync_log(file_id: str, file_name: str, modified: str, chunks: int):
     }).execute()
 
 
+# ── NEW: Stream download directly to disk ─────────────────────────────────────
+def download_file_to_path(file_id: str, access_token: str, dest_path: str) -> None:
+    """Stream a WorkDrive file directly to disk — never holds full bytes in RAM."""
+    base_url = require_env("ZOHO_WORKDRIVE_URL").rstrip("/")
+    headers = build_headers(access_token)
+
+    info_resp = requests.get(f"{base_url}/files/{file_id}", headers=headers, timeout=30)
+    info_resp.raise_for_status()
+    info_json = safe_json(info_resp)
+
+    candidate_urls = []
+    metadata_url = extract_download_url_from_metadata(info_json)
+    if metadata_url:
+        candidate_urls.append(metadata_url)
+    candidate_urls.append(f"{base_url}/files/{file_id}/download")
+
+    for url in candidate_urls:
+        logger.info("    Streaming download: %s", url)
+        try:
+            resp = requests.get(
+                url,
+                headers={**headers, "Accept": "*/*"},
+                timeout=120,
+                allow_redirects=True,
+                stream=True,                        # ← key: stream, don't buffer
+            )
+        except Exception as e:
+            logger.warning("    Stream request failed: %s", e)
+            continue
+
+        content_type = (resp.headers.get("Content-Type") or "").lower()
+
+        if resp.ok and "application/json" not in content_type:
+            total = 0
+            with open(dest_path, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=65536):  # 64KB at a time
+                    if chunk:
+                        f.write(chunk)
+                        total += len(chunk)
+            logger.info("    Written %d bytes to disk", total)
+            if total > 100:
+                return  # success
+
+        elif "application/json" in content_type:
+            body = safe_json(resp)
+            nested_url = extract_download_url_from_metadata(body)
+            if nested_url and nested_url not in candidate_urls:
+                candidate_urls.append(nested_url)
+
+    raise ValueError(f"Stream download failed for file_id={file_id}")
+
+
+# ── NEW: Extract PDF text from disk path (low RAM) ────────────────────────────
+def _extract_pdf_from_path(pdf_path: str) -> List[Dict[str, Any]]:
+    """Open PDF from disk — fitz reads pages lazily, avoids bytes+doc in RAM together."""
+    import fitz
+    pages = []
+    try:
+        doc = fitz.open(pdf_path)                  # ← path, not stream=bytes
+        for i in range(len(doc)):
+            page = doc[i]
+            text = page.get_text("text").strip()
+            if text:
+                pages.append({"text": text, "page": i + 1})
+            page = None
+            if i % 50 == 0:
+                gc.collect()
+        doc.close()
+        del doc
+    except Exception as e:
+        logger.error("PDF extraction error: %s", e)
+    finally:
+        gc.collect()
+    return pages
+
+
+# ── NEW: Unified path-based extractor ────────────────────────────────────────
+def extract_text_from_path(file_path: str, doc_type: str) -> List[Dict[str, Any]]:
+    """Extract text from a file already on disk."""
+    if doc_type == "pdf":
+        return _extract_pdf_from_path(file_path)
+    if doc_type in ("pptx", "docx", "txt"):
+        with open(file_path, "rb") as f:
+            data = f.read()
+        result = extract_text(data, doc_type)
+        del data
+        gc.collect()
+        return result
+    return []
+
+
 def run_sync():
     import subprocess
     import sys
@@ -432,8 +523,6 @@ def run_sync():
             is_update = False
 
         # ── Spawn fresh subprocess per file ────────────────────
-        # Each file gets its own process — memory resets after each
-        # Supports 35 docs, 100 docs, 500 docs — no memory limit
         try:
             result = subprocess.run(
                 [
@@ -466,7 +555,6 @@ def run_sync():
         except Exception as e:
             logger.error("  ❌ Error: %s — %s", file_name, e)
 
-        # Pause between files
         time.sleep(2)
 
     logger.info("=" * 60)
