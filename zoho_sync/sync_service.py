@@ -385,31 +385,22 @@ def update_sync_log(file_id: str, file_name: str, modified: str, chunks: int):
 
 
 def run_sync():
-    from backend.services.vector_service import (
-        init_pinecone,
-        upsert_chunks,
-        delete_chunks_for_file,
-    )
+    import subprocess
+    import sys
 
     logger.info("=" * 60)
     logger.info("🔄 BOTZI Zoho WorkDrive Sync Started")
     logger.info("=" * 60)
 
-    init_pinecone()
     token = get_zoho_access_token()
-
     team_folder_id = require_env("ZOHO_TEAM_FOLDER_ID")
     logger.info("Scanning team folder: %s", team_folder_id)
 
     all_files = list_folder_recursive(team_folder_id, token)
     logger.info("Found %d supported files in WorkDrive", len(all_files))
 
-    # Load sync log — all previously indexed files
     sync_log = get_sync_log()
     logger.info("Previously synced: %d files", len(sync_log))
-
-    chunk_size = int(os.getenv("CHUNK_SIZE", "800"))
-    overlap    = int(os.getenv("CHUNK_OVERLAP", "100"))
 
     new_count     = 0
     updated_count = 0
@@ -421,75 +412,62 @@ def run_sync():
         modified  = file_info["modified"]
         doc_type  = file_info["doc_type"]
 
-        # ── SKIP MP4 always — no text to extract ──────────────
+        # ── Skip MP4 always — no text ──────────────────────────
         if doc_type == "mp4":
             skipped_count += 1
-            logger.info("  ⏭️  Skipping mp4 (no text): %s", file_name)
+            logger.info("  ⏭️  Skipping mp4: %s", file_name)
             continue
 
-        # ── SKIP if already synced and not modified ────────────
+        # ── Skip unchanged files ───────────────────────────────
         if file_id in sync_log:
             if sync_log[file_id] == modified:
                 skipped_count += 1
                 logger.info("  ⏭️  Skipping unchanged: %s", file_name)
                 continue
             else:
-                logger.info("  🔄 Re-indexing (modified): %s", file_name)
+                logger.info("  🔄 Re-indexing modified: %s", file_name)
                 is_update = True
         else:
-            logger.info("  🆕 New file detected: %s", file_name)
+            logger.info("  🆕 New file: %s", file_name)
             is_update = False
 
-        # ── PROCESS FILE ──────────────────────────────────────
+        # ── Spawn fresh subprocess per file ────────────────────
+        # Each file gets its own process — memory resets after each
+        # Supports 35 docs, 100 docs, 500 docs — no memory limit
         try:
-            data  = download_file(file_id, token)
-            pages = extract_text(data, doc_type)
-
-            # Free download bytes immediately
-            del data
-            gc.collect()
-
-            if not pages:
-                logger.warning("  ⚠️ No text extracted from %s", file_name)
-                # Mark as synced so it is never retried
-                update_sync_log(file_id, file_name, modified, 0)
-                continue
-
-            chunks = split_into_chunks(
-                pages, file_id, file_name, doc_type,
-                chunk_size=chunk_size, overlap=overlap,
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m", "zoho_sync.sync_one_file",
+                    file_id,
+                    file_name,
+                    modified,
+                    doc_type,
+                    "true" if is_update else "false",
+                ],
+                timeout=600,
+                capture_output=False,
             )
 
-            # Free pages immediately
-            del pages
-            gc.collect()
-
-            # Delete old vectors before re-indexing
-            if is_update:
-                delete_chunks_for_file(file_id)
-                logger.info("  🗑️  Deleted old vectors: %s", file_name)
-
-            upserted = upsert_chunks(chunks)
-            logger.info("  ✅ %s — %d vectors upserted", file_name, upserted)
-
-            update_sync_log(file_id, file_name, modified, upserted)
-
-            # Free chunks immediately
-            del chunks
-            gc.collect()
-
-            if is_update:
-                updated_count += 1
+            if result.returncode == 0:
+                if is_update:
+                    updated_count += 1
+                else:
+                    new_count += 1
+                logger.info("  ✅ Completed: %s", file_name)
             else:
-                new_count += 1
+                logger.error(
+                    "  ❌ Failed (exit %d): %s",
+                    result.returncode, file_name
+                )
 
-            # Pause between files to keep memory low
-            time.sleep(3)
-
+        except subprocess.TimeoutExpired:
+            logger.error("  ❌ Timeout (10min): %s", file_name)
         except Exception as e:
-            logger.error("  ❌ Failed: %s — %s", file_name, e, exc_info=True)
-            gc.collect()
-            continue
+            logger.error("  ❌ Error: %s — %s", file_name, e)
+
+        # Pause between files
+        time.sleep(2)
 
     logger.info("=" * 60)
     logger.info(
