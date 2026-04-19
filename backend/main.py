@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 # ── Internal routers ──────────────────────────────────────
 from backend.routers import chat, feedback, analytics, health, cliq
@@ -106,6 +107,9 @@ app.include_router(chat.router,      prefix="/api/chat", tags=["Chat"])
 app.include_router(feedback.router,  prefix="/api",      tags=["Feedback"])
 app.include_router(analytics.router, prefix="/api",      tags=["Analytics"])
 app.include_router(cliq.router,      prefix="/api",      tags=["Zoho Cliq"])
+
+# ── Serve frontend static files ───────────────────────────
+app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")
 
 
 # ── Root endpoint ─────────────────────────────────────────
